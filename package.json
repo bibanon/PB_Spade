@@ -1,0 +1,17 @@
+{
+  "name": "pb_spade",
+  "private": false,
+  "version": "1.0.0",
+  "dependencies": {
+    "async": "^2.1.2",
+    "commander": "^2.9.0",
+    "fs-extra": "^1.0.0",
+    "request": "^2.78.0"
+  },
+  "main": "index.js",
+  "bin": {
+    "pb_spade": "index.js"
+  },
+  "repository": "r3c0d3x/PB_Spade",
+  "preferGlobal": true
+}
