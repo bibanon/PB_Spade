@@ -1,7 +1,7 @@
 {
   "name": "pb_spade",
   "private": false,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "dependencies": {
     "async": "^2.1.2",
     "commander": "^2.9.0",

@@ -2,16 +2,23 @@
 
 'use strict';
 
-const argv = require('commander')
+const commander = require('commander');
+
+const argv = commander
     .option('-a, --attempts [num]', 'number of times to try to connect to Photobucket', parseInt, 3)
     .option('-m, --media-timeout [ms]', 'time between requests (in milliseconds) to Photobucket\'s media servers', parseInt, 500)
     .option('-l, --links [file]', 'write the links to file instead of downloading them')
     .option('-p, --page [num]', 'starting page number', parseInt, 1)
     .option('-o, --output [path]', 'file/directory that media is saved to/in (if directory, will be created if it doesn\'t exist)')
-    .option('-s, --site-timeout [ms]', 'time between requests (in milliseconds) to Photobucket\'s website/API.', parseInt, 2000)
-    .option('-u, --url <url>', 'URL of the album.')
-    .option('-v, --verbose', 'describe every minute detail in every step we do')
+    .option('-s, --site-timeout [ms]', 'time between requests (in milliseconds) to Photobucket\'s website/API', parseInt, 2000)
+    .option('-u, --url <url>', 'URL of the file/album')
+    .option('-v, --verbose', 'describe every minute detail in every step we do', false)
     .parse(process.argv);
+
+if (process.argv.length === 2) {
+    commander.help();
+    process.exit(1);
+}
 
 argv.options.forEach((option) => {
     if (option.required !== 0 && typeof argv[option.long.slice(2)] === 'undefined') {
@@ -27,6 +34,7 @@ if (typeof argv.output === 'undefined' && typeof argv.links === 'undefined') {
 
 const async = require('async');
 const fs = require('fs-extra');
+const path = require('path');
 const request = require('request');
 const urlMod = require('url');
 
@@ -53,16 +61,20 @@ function retry(timeout, task, fnCb) {
     }, fnCb);
 }
 
-function getUrl(obj) {
-    return obj.fullsizeUrl;
+function getFileDetails(obj) {
+    return {
+        filename: path.parse(obj.fullsizeUrl).base,
+        url: obj.fullsizeUrl,
+    };
 }
 
 function downloadFile(obj, downloadCb, file) {
     let outFile = argv.output;
+    const details = getFileDetails(obj);
 
     if (typeof file === 'undefined') {
         fs.ensureDirSync(argv.output);
-        outFile += (argv.output[argv.output.length - 1] === '/' ? '' : '/') + obj.titleOrFilename + '.' + obj.ext;
+        outFile += (argv.output[argv.output.length - 1] === '/' ? '' : '/') + details.filename;
     }
 
     retry(argv.mediaTimeout, (retryCb) => {
@@ -75,7 +87,7 @@ function downloadFile(obj, downloadCb, file) {
 
         request({
             accept: 'image/webp,image/*,*/*;q=0.8',
-            uri: getUrl(obj),
+            uri: details.url,
         }).on('error', (reqErr) => {
             if (reqErr !== null) {
                 retryCb(reqErr, null);
@@ -86,7 +98,9 @@ function downloadFile(obj, downloadCb, file) {
 
 function req(opts, reqCb) {
     retry(argv.siteTimeout, (retryCb) => {
-        console.log('\nTrying %s...\n', opts.uri + (typeof opts.qs === 'undefined' ? '' : ' (page #' + opts.qs.page + ')'));
+        if (argv.verbose) {
+            console.log('\nTrying %s...', opts.uri + (typeof opts.qs === 'undefined' ? '' : ' (page #' + opts.qs.page + ')'));
+        }
         request(opts, (reqErr, _, reqBody) => {
             if (reqErr) {
                 retryCb(reqErr, null);
@@ -137,9 +151,9 @@ req({
 
                 if (parseSuccess) {
                     if (typeof parsedJson.items === 'undefined') {
-                        console.log('Detected link to be image\n');
+                        console.log('\nDetected link to be image\n');
                         if (typeof argv.links === 'string') {
-                            fs.outputFile(argv.links, getUrl(parsedJson), (writeErr) => {
+                            fs.outputFile(argv.links, getFileDetails(parsedJson).url, (writeErr) => {
                                 if (writeErr === null) {
                                     console.log('Done!');
                                     process.exit(0);
@@ -161,27 +175,27 @@ req({
                             pagesNeeded += 1;
                         }
 
-                        console.log('Detected link to be album (%d images; %d pages at %d files per page)\n', parsedJson.total, pagesNeeded, parsedJson.pageSize);
+                        console.log('\nDetected link to be album (%d images; %d pages at %d files per page)\n', parsedJson.total, pagesNeeded, parsedJson.pageSize);
 
                         const urls = [...Array(pagesNeeded - newStartingPage + 1).keys()].map((val) => {
                             return {
                                 headers: {
+                                    accept: 'application/json, text/javascript, */*; q=0.01',
                                     'accept-encoding': 'gzip',
                                     referer: url + '?sort=9&page=' + (val + newStartingPage - 1),
                                     'user-agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.99 Safari/537.36',
                                     'x-requested-with': 'XMLHttpRequest',
-                                    accept: 'application/json, text/javascript, */*; q=0.01',
                                 },
                                 method: 'GET',
                                 qs: {
                                     'filters[album]': parsedJson.currentAlbumPath, // album path
                                     'filters[album_content]': '2', // unknown default
-                                    limit: String(parsedJson.pageSize),
-                                    page: String(val + newStartingPage), // page #
-                                    linkerMode: '', // unknown default
-                                    json: '1', // says we want JSON results
-                                    sort: '9', // unknown default
                                     hash: hash[1], // proves that we're actually on the site
+                                    json: '1', // says we want JSON results
+                                    limit: String(parsedJson.pageSize),
+                                    linkerMode: '', // unknown default
+                                    page: String(val + newStartingPage), // page #
+                                    sort: '9', // unknown default
                                 },
                                 uri: urlMod.format({ // api path
                                     host: parsedUrl.host,
@@ -196,10 +210,12 @@ req({
                             async.mapSeries(urls, req, (mapErr, mapRes) => {
                                 if (mapErr === null) {
                                     fs.outputFile(argv.links, mapRes.map((page) => {
-                                        return JSON.parse(page).body.objects.map(getUrl);
+                                        return JSON.parse(page).body.objects.map(getFileDetails);
                                     }).reduce((memo, current) => {
-                                        return memo.concat(current);
-                                    }, parsedJson.items.objects.map(getUrl)).join('\n'), (writeErr) => {
+                                        return memo.concat(current.url);
+                                    }, parsedJson.items.objects.map((obj) => {
+                                        return getFileDetails(obj).url;
+                                    })).join('\n'), (writeErr) => {
                                         if (writeErr !== null) {
                                             console.log(writeErr);
                                         }
