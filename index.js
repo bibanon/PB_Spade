@@ -7,7 +7,7 @@ const commander = require('commander');
 const argv = commander
     .option('-a, --attempts [num]', 'number of times to try to connect to Photobucket', parseInt, 3)
     .option('-m, --media-timeout [ms]', 'time between requests (in milliseconds) to Photobucket\'s media servers', parseInt, 500)
-    .option('-l, --links [file]', 'write image links to a file instead of downloading them')
+    //.option('-l, --links [file]', 'write image links to a file instead of downloading them')
     .option('-o, --output [path]', 'file/directory that media is saved to/in (if directory, will be created if it doesn\'t exist)')
     .option('-r, --recursive', 'if album, get subalbums (including their subalbums)', false)
     .option('-s, --site-timeout [ms]', 'time between requests (in milliseconds) to Photobucket\'s website/API', parseInt, 2000)

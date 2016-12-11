@@ -17,7 +17,6 @@ npm i -g pb_spade
     -h, --help                output usage information
     -a, --attempts [num]      number of times to try to connect to Photobucket
     -m, --media-timeout [ms]  time between requests (in milliseconds) to Photobucket's media servers
-    -l, --links [file]        write image links to a file instead of downloading them
     -o, --output [path]       file/directory that media is saved to/in (if directory, will be created if it doesn't exist)
     -r, --recursive           if album, get subalbums (including their subalbums)
     -s, --site-timeout [ms]   time between requests (in milliseconds) to Photobucket's website/API
