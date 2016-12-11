@@ -18,8 +18,8 @@ npm i -g pb_spade
     -a, --attempts [num]      number of times to try to connect to Photobucket
     -m, --media-timeout [ms]  time between requests (in milliseconds) to Photobucket's media servers
     -l, --links [file]        write image links to a file instead of downloading them
-    -p, --page [num]          starting page number
     -o, --output [path]       file/directory that media is saved to/in (if directory, will be created if it doesn't exist)
+    -r, --recursive           if album, get subalbums (including their subalbums)
     -s, --site-timeout [ms]   time between requests (in milliseconds) to Photobucket's website/API
     -u, --url <url>           URL of the file/album
     -v, --verbose             describe every minute detail in every step we do
@@ -43,14 +43,12 @@ This will download the file from that Photobucket page and save it as `waterslid
 pb_spade -u "http://s160.photobucket.com/user/Spinningfox/library/Internet%20Fads/Teh%20Interwebs%2053R10U5%208U51N355?sort=3&page=1" -o "serious_business/"
 ```
 
-This will download all the files in that Photobucket album and save them in the `serious_business/` directory (inside the current directory). The directory will be created if it doesn't already exist.
+This will download all the files in that root of the Photobucket album and save them in the `serious_business/` directory (inside the current directory). The directory will be created if it doesn't already exist.
 
-PB_Spade does not yet have [support for nested albums/folders](https://github.com/r3c0d3x/PB_Spade/issues/2).
-
-### Image URL Lists
+### Albums w/ Subalbums
 
 ```
-pb_spade -u "http://s160.photobucket.com/user/Spinningfox/library/Internet%20Fads/Teh%20Interwebs%2053R10U5%208U51N355?sort=3&page=1" -l "serious_business_links.txt"
+pb_spade -u "http://s160.photobucket.com/user/Spinningfox/library/Internet%20Fads?sort=3&page=1" -o "memes/" -r
 ```
 
-This will write every image's direct URL (from the album) to a newline-delimited file with the name `serious_business_links.txt` in the current directory.
+This will download all the files in that Photobucket album and inside its subalbums and save them in the `memes/` directory (inside the current directory). The directory will be created if it doesn't already exist.

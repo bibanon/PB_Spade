@@ -1,0 +1,28 @@
+{
+    "extends": "airbnb",
+    "installedESLint": true,
+    "plugins": [
+        "react",
+        "jsx-a11y",
+        "import"
+    ],
+    "parserOptions": {
+        "sourceType": "script"
+    },
+    "ecmaFeatures": {
+        "impliedStrict": false
+    },
+    "rules": {
+        "strict": ["error", "global"],
+        "linebreak-style": "off",
+        "indent": ["error", 4],
+        "max-len": ["warn", 170],
+        "no-console": "off",
+        "arrow-body-style": ["error", "always"],
+        "no-useless-escape": "off",
+        "spaced-comment": "warn",
+        "no-else-return": "off",
+        "consistent-return": "off",
+        "no-lonely-if": "warn"
+    }
+}

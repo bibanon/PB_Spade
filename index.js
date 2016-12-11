@@ -8,8 +8,8 @@ const argv = commander
     .option('-a, --attempts [num]', 'number of times to try to connect to Photobucket', parseInt, 3)
     .option('-m, --media-timeout [ms]', 'time between requests (in milliseconds) to Photobucket\'s media servers', parseInt, 500)
     .option('-l, --links [file]', 'write image links to a file instead of downloading them')
-    .option('-p, --page [num]', 'starting page number', parseInt, 1)
     .option('-o, --output [path]', 'file/directory that media is saved to/in (if directory, will be created if it doesn\'t exist)')
+    .option('-r, --recursive', 'if album, get subalbums (including their subalbums)', false)
     .option('-s, --site-timeout [ms]', 'time between requests (in milliseconds) to Photobucket\'s website/API', parseInt, 2000)
     .option('-u, --url <url>', 'URL of the file/album')
     .option('-v, --verbose', 'describe every minute detail in every step we do', false)
@@ -32,16 +32,40 @@ if (typeof argv.output === 'undefined' && typeof argv.links === 'undefined') {
     process.exit(1);
 }
 
+if (argv.output[argv.output.length - 1] !== '/') {
+    argv.output += '/';
+}
+
 const async = require('async');
+const extend = require('deep-extend');
 const fs = require('fs-extra');
 const path = require('path');
 const request = require('request');
-const urlMod = require('url');
+const url = require('url');
 
-const startingPage = argv.page;
+function opts(custom) {
+    return extend({
+        headers: {
+            'accept-language': 'en-US,en;q=0.8',
+            'content-type': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'user-agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.99 Safari/537.36',
+        },
+        gzip: true,
+        method: 'GET',
+    }, custom);
+}
 
-const url = argv.url.indexOf('?') > -1 ? argv.url.split('?')[0] : argv.url;
-const parsedUrl = urlMod.parse(url);
+function apiOpts(custom) {
+    return extend(opts({
+        headers: {
+            accept: 'application/json, text/javascript, */*; q=0.01',
+            'x-requested-with': 'XMLHttpRequest',
+        },
+        qs: {
+            json: 1,
+        },
+    }), custom);
+}
 
 function retry(timeout, task, fnCb) {
     let attempts = 0;
@@ -61,201 +85,361 @@ function retry(timeout, task, fnCb) {
     }, fnCb);
 }
 
-function getFileDetails(obj) {
-    return {
-        filename: path.parse(obj.fullsizeUrl).base,
-        url: obj.fullsizeUrl,
-    };
-}
-
-function downloadFile(obj, downloadCb, file) {
-    let outFile = argv.output;
-    const details = getFileDetails(obj);
-
-    if (typeof file === 'undefined') {
-        fs.ensureDirSync(argv.output);
-        outFile += (argv.output[argv.output.length - 1] === '/' ? '' : '/') + details.filename;
-    }
-
-    retry(argv.mediaTimeout, (retryCb) => {
-        const fileStream = fs.createWriteStream(outFile);
-
-        fileStream.on('close', () => {
-            console.log('Downloaded %s', outFile);
-            retryCb(null);
-        });
-
-        request({
-            accept: 'image/webp,image/*,*/*;q=0.8',
-            uri: details.url,
-        }).on('error', (reqErr) => {
-            if (reqErr !== null) {
-                retryCb(reqErr, null);
-            }
-        }).pipe(fileStream);
-    }, downloadCb);
-}
-
-function req(opts, reqCb) {
+function req(customOpts, reqCb) {
     retry(argv.siteTimeout, (retryCb) => {
         if (argv.verbose) {
-            console.log('\nTrying %s...', opts.uri + (typeof opts.qs === 'undefined' ? '' : ' (page #' + opts.qs.page + ')'));
-        }
-        request(opts, (reqErr, _, reqBody) => {
-            if (reqErr) {
-                retryCb(reqErr, null);
+            if (typeof customOpts.qs !== 'undefined' && typeof customOpts.qs.page !== 'undefined') {
+                console.log(`Trying ${customOpts.uri}... (page #${customOpts.qs.page})`);
             } else {
-                retryCb(null, reqBody);
+                console.log(`Trying ${customOpts.uri}...`);
             }
-        });
+        }
+        setTimeout(() => {
+            request(customOpts, (reqErr, _, reqBody) => {
+                if (reqErr === null) {
+                    return retryCb(null, reqBody);
+                } else {
+                    return retryCb(reqErr, null);
+                }
+            });
+        }, argv.siteTimeout);
     }, reqCb);
 }
 
-req({
-    method: 'GET',
-    uri: url + (url.indexOf('library') > -1 || url.indexOf('album') > -1 ? '?page=' + startingPage : ''),
-}, (reqErr, reqBody) => {
-    if (reqErr === null) {
-        /*let rawJsonAttempt = reqBody.split('\n').filter((line) => {
-            return line.indexOf('collectionData:') > -1 && line.indexOf('objects') > -1;
-        }); */
-        const rawJsonAttempt = reqBody.split('\n').filter((line) => {
-            return line.indexOf('"pictureId"') > -1;
-        });
-        const hashAttempt = reqBody.split('\n').filter((line) => {
-            return line.indexOf('<input type="hidden"') > -1 && line.indexOf('id="token"') > -1;
-        });
+function apiReq(customOpts, reqCb) {
+    req(customOpts, (reqErr, reqBody) => {
+        if (reqErr === null) {
+            try {
+                let data = {};
+                data = JSON.parse(reqBody);
+                return reqCb(null, data);
+            } catch (jsonErr) {
+                return reqCb(jsonErr, null);
+            }
+        } else {
+            return reqCb(reqErr, null);
+        }
+    });
+}
 
-        if (rawJsonAttempt.length === 1 && hashAttempt.length === 1) {
-            //let fixedJson = /^\s*collectionData:\s?({.+}),$/.exec(rawJsonAttempt[0]);
-            //let fixedJson = /.+({.*"pictureId".*})(?:\);)|(?:,)$/.exec(rawJsonAttempt[0]);
-            const fixedJson = (/^[A-Za-z(),\s\.:]+({.*"pictureId".*})(?:(?:\);)|(?:,))$/).exec(rawJsonAttempt[0]);
-            const hash = (/<input type="hidden" .+ id="token" value="(.+)"\s?\/>/).exec(hashAttempt[0]);
+class File {
+    constructor(rawUrl, fns) {
+        this.type = 'file';
+        this.url = rawUrl;
+        this.filename = path.parse(this.url).base;
+        if (typeof fns !== 'undefined') {
+            this.fns = fns;
+        } else {
+            this.fns = {};
+        }
+    }
 
-            if (fixedJson === null) {
-                console.log('ERROR: JSON RegExp gave no results!');
-            } else if (hash === null) {
-                console.log('ERROR: Hash RegExp gave no results!');
+    static fromObj(obj, fns) {
+        return new File(obj.fullsizeUrl, typeof fns === 'object' ? fns : undefined);
+    }
+
+    download(toPath, cb) {
+        if (typeof this.fns.beforeDl === 'function') {
+            this.fns.beforeDl(this);
+        }
+        retry(argv.mediaTimeout, (retryCb) => {
+            fs.ensureDirSync(path.parse(toPath).dir);
+            const fileStream = fs.createWriteStream(toPath);
+
+            fileStream.on('close', () => {
+                if (typeof this.fns.afterDl === 'function') {
+                    this.fns.afterDl(this);
+                }
+                return retryCb(null);
+            });
+
+            setTimeout(() => {
+                request({
+                    accept: 'image/webp,image/*',
+                    uri: this.url,
+                }).on('error', (reqErr) => {
+                    if (reqErr !== null) {
+                        return retryCb(reqErr);
+                    }
+                }).pipe(fileStream);
+            }, argv.mediaTimeout);
+        }, cb);
+    }
+}
+
+class Album {
+    constructor(originalUrl, albumPath, fns) {
+        this.url = url.parse(originalUrl);
+        this.type = 'album';
+        this.path = albumPath;
+        this.perPage = 24;
+        this.total = null;
+        if (typeof fns !== 'undefined') {
+            this.fns = fns;
+        } else {
+            this.fns = {};
+        }
+    }
+
+    page(num, cb, fns) {
+        if (typeof this.fns.beforePage === 'function') {
+            this.fns.beforePage(num);
+        }
+        apiReq(apiOpts({
+            qs: {
+                'filters[album]': this.path,
+                limit: this.perPage, // page uses 24 by default
+                page: num,
+            },
+            uri: `${this.url.protocol}//${this.url.hostname}/component/Common-PageCollection-Album-AlbumPageCollection`,
+        }), (reqErr, reqBody) => {
+            if (reqErr === null) {
+                this.total = reqBody.body.total;
+                if (typeof this.fns.afterPage === 'function') {
+                    this.fns.afterPage(num);
+                }
+                return cb(null, {
+                    files: reqBody.body.objects.map((obj) => {
+                        return File.fromObj(obj, typeof fns === 'object' ? fns : undefined);
+                    }),
+                    offset: reqBody.body.currentOffset,
+                    total: this.total,
+                });
             } else {
-                let parsedJson = {};
-                let parseSuccess = false;
+                return cb(reqErr, null);
+            }
+        });
+    }
 
-                try {
-                    parsedJson = JSON.parse(fixedJson[1]);
-                    parseSuccess = true;
-                } catch (parseErr) {
-                    /* console.log(fixedJson[1]);
-                    throw parseErr;*/
-                    console.log('ERROR: Couldn\'t parse JSON!');
+    files(cb, fns) {
+        let out = [];
+
+        this.page(1, (pageErr, pageData) => {
+            if (pageErr === null) {
+                out = pageData.files;
+
+                let pagesNeeded = 0;
+                while (pagesNeeded * this.perPage < this.total) {
+                    pagesNeeded += 1;
                 }
 
-                if (parseSuccess) {
-                    if (typeof parsedJson.items === 'undefined') {
-                        console.log('\nDetected link to be image\n');
-                        if (typeof argv.links === 'string') {
-                            fs.outputFile(argv.links, getFileDetails(parsedJson).url, (writeErr) => {
-                                if (writeErr === null) {
-                                    console.log('Done!');
-                                    process.exit(0);
-                                } else {
-                                    console.log(writeErr);
-                                }
-                            });
+                pagesNeeded -= 1; // because we already did the first page
+
+                return async.mapSeries([...Array(pagesNeeded).keys()].map((num) => {
+                    return num + 2;
+                }), (num, mapCb) => {
+                    this.page(num, (mapPageErr, mapPageData) => {
+                        if (mapPageErr === null) {
+                            return mapCb(null, mapPageData.files);
                         } else {
-                            downloadFile(parsedJson, () => {
-                                console.log('\nDone!');
-                                process.exit(0);
-                            }, true);
+                            return mapCb(mapPageErr, null);
+                        }
+                    }, typeof fns === 'object' ? fns : undefined);
+                }, (mapErr, mapData) => {
+                    if (mapErr === null) {
+                        mapData.forEach((page) => {
+                            out = out.concat(page);
+                        });
+                        return cb(null, out);
+                    } else {
+                        return cb(mapErr, null);
+                    }
+                });
+            } else {
+                return cb(pageErr, null);
+            }
+        }, typeof fns === 'object' ? fns : undefined);
+    }
+
+    download(directory, cb, recursive, recursiveFns) {
+        if (typeof this.fns.afterAlbumDl === 'function') {
+            this.fns.beforeAlbumDl();
+        }
+        this.files((filesErr, filesData) => {
+            if (filesErr === null) {
+                async.eachSeries(filesData, (file, fileEachCb) => {
+                    file.download(directory + file.filename, (dlErr) => {
+                        fileEachCb(dlErr);
+                    });
+                }, (eachErr) => {
+                    if (eachErr === null) {
+                        if (typeof this.fns.afterAlbumDl === 'function') {
+                            this.fns.afterAlbumDl();
+                        }
+                        if (recursive) {
+                            this.subalbums((subalbumsErr, subalbumsData) => {
+                                if (subalbumsData.length === 0) {
+                                    if (typeof this.fns.noSubAlbums === 'function') {
+                                        this.fns.noSubAlbums();
+                                    }
+                                } else {
+                                    if (typeof this.fns.beforeRecursiveAlbumDl === 'function') {
+                                        this.fns.beforeRecursiveAlbumDl(subalbumsData.length);
+                                    }
+                                }
+                                if (subalbumsErr === null) {
+                                    async.eachSeries(subalbumsData, (subalbum, subalbumEachCb) => {
+                                        subalbum.album.download(`${directory + subalbum.title.replace(/[\\/><|:&"?*]/g, '_')}/`, subalbumEachCb, true);
+                                    }, (subalbumDlErr) => {
+                                        if (subalbumDlErr === null) {
+                                            if (typeof this.fns.afterRecursiveAlbumDl === 'function') {
+                                                this.fns.afterRecursiveAlbumDl();
+                                            }
+                                            cb(null);
+                                        } else {
+                                            cb(subalbumDlErr);
+                                        }
+                                    });
+                                } else {
+                                    cb(subalbumsErr);
+                                }
+                            }, recursiveFns ? this.fns : undefined);
+                        } else {
+                            cb(null);
                         }
                     } else {
-                        let pagesNeeded = 1;
-                        const newStartingPage = startingPage + 1;
+                        cb(eachErr);
+                    }
+                });
+            } else {
+                cb(filesErr);
+            }
+        });
+    }
 
-                        while (pagesNeeded * parsedJson.pageSize < parsedJson.total) {
-                            pagesNeeded += 1;
-                        }
+    subalbums(cb, fns) {
+        apiReq(apiOpts({
+            qs: {
+                albumPath: this.path,
+                fetchSubAlbumsOnly: true,
+                deferCollapsed: true,
+            },
+            uri: `${this.url.protocol}//${this.url.hostname}/component/Albums-SubalbumList`,
+        }), (reqErr, reqBody) => {
+            if (reqErr === null) {
+                if (typeof fns === 'object') {
+                    cb(null, reqBody.body.subAlbums.map((subalbum) => {
+                        return {
+                            album: new Album(subalbum.linkUrl, subalbum.path, typeof fns === 'object' ? fns : undefined),
+                            title: subalbum.title,
+                        };
+                    }));
+                } else {
+                    cb(null, reqBody.body.subAlbums.map((subalbum) => {
+                        return {
+                            albums: new Album(subalbum.linkUrl, subalbum.path, typeof fns === 'object' ? fns : undefined),
+                            title: subalbum.title,
+                        };
+                    }));
+                }
+            } else {
+                cb(reqErr, null);
+            }
+        });
+    }
+}
 
-                        console.log('\nDetected link to be album (%d images; %d pages at %d files per page)\n', parsedJson.total, pagesNeeded, parsedJson.pageSize);
+function handleUrl(originalUrl, cb, fns) {
+    const fixedUrl = `${(originalUrl.indexOf('http') === 0 ? originalUrl : `http://${originalUrl}`).split('?')[0]}?page=1`;
+    req(opts({
+        uri: fixedUrl,
+    }), (reqErr, reqBody) => {
+        if (reqErr === null) {
+            const lines = reqBody.split('\n');
+            let albumPathAttempt = lines.filter((line) => {
+                return line.indexOf('queryObj:') > -1 && line.indexOf('"album":') > -1;
+            });
 
-                        const urls = [...Array(pagesNeeded - newStartingPage + 1).keys()].map((val) => {
-                            return {
-                                headers: {
-                                    accept: 'application/json, text/javascript, */*; q=0.01',
-                                    'accept-encoding': 'gzip',
-                                    referer: url + '?sort=9&page=' + (val + newStartingPage - 1),
-                                    'user-agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.99 Safari/537.36',
-                                    'x-requested-with': 'XMLHttpRequest',
-                                },
-                                method: 'GET',
-                                qs: {
-                                    'filters[album]': parsedJson.currentAlbumPath, // album path
-                                    'filters[album_content]': '2', // unknown default
-                                    hash: hash[1], // proves that we're actually on the site
-                                    json: '1', // says we want JSON results
-                                    limit: String(parsedJson.pageSize),
-                                    linkerMode: '', // unknown default
-                                    page: String(val + newStartingPage), // page #
-                                    sort: '9', // unknown default
-                                },
-                                uri: urlMod.format({ // api path
-                                    host: parsedUrl.host,
-                                    pathname: parsedJson.contentFetchUrl,
-                                    protocol: 'http',
-                                    slashes: true,
-                                }),
-                            };
-                        });
+            if (albumPathAttempt.length === 1) {
+                albumPathAttempt = /\s*queryObj:\s?{.+"album":"([%\w\d\s\\\/]+)",.+},/.exec(albumPathAttempt[0]);
 
-                        if (typeof argv.links === 'string') {
-                            async.mapSeries(urls, req, (mapErr, mapRes) => {
-                                if (mapErr === null) {
-                                    fs.outputFile(argv.links, mapRes.map((page) => {
-                                        return JSON.parse(page).body.objects.map(getFileDetails);
-                                    }).reduce((memo, current) => {
-                                        return memo.concat(current.url);
-                                    }, parsedJson.items.objects.map((obj) => {
-                                        return getFileDetails(obj).url;
-                                    })).join('\n'), (writeErr) => {
-                                        if (writeErr !== null) {
-                                            console.log(writeErr);
-                                        }
-                                    });
-                                } else {
-                                    console.log(mapErr);
-                                }
-                            });
+                if (albumPathAttempt === null) {
+                    return cb('Couldn\'t parse album object data from webpage.', null);
+                } else {
+                    if (typeof fns === 'object') {
+                        return cb(null, new Album(fixedUrl, JSON.parse(`"${albumPathAttempt[1]}"`), fns));
+                    } else {
+                        return cb(null, new Album(fixedUrl, JSON.parse(`"${albumPathAttempt[1]}"`)));
+                    }
+                }
+            } else {
+                let fileObjAttempt = lines.filter((line) => {
+                    return line.indexOf('Pb.Data.Shared.MEDIA') > -1 && line.indexOf('"originalUrl":') > -1;
+                });
+
+                if (fileObjAttempt.length === 1) {
+                    fileObjAttempt = /"fullsizeUrl":"([:%\w\d\/\\\.]+)"/.exec(fileObjAttempt[0]);
+
+                    if (fileObjAttempt === null) {
+                        return cb('Couldn\'t parse file object data from webpage.', null);
+                    } else {
+                        if (typeof fns === 'object') {
+                            return cb(null, new File(JSON.parse(`"${fileObjAttempt[1]}"`), fns));
                         } else {
-                            async.eachSeries(parsedJson.items.objects, downloadFile, (eachErr) => {
-                                if (eachErr === null) {
-                                    async.eachSeries(urls, (page, eachCb) => {
-                                        req(page, (pageReqErr, pageReqRes) => {
-                                            if (pageReqErr === null) {
-                                                async.eachSeries(JSON.parse(pageReqRes).body.objects, downloadFile, (eachErr2) => {
-                                                    eachCb(eachErr2);
-                                                });
-                                            } else {
-                                                eachCb(pageReqErr);
-                                            }
-                                        });
-                                    }, (eachErr2) => {
-                                        if (eachErr2 === null) {
-                                            console.log('\nDone!');
-                                        } else {
-                                            console.log(eachErr2);
-                                        }
-                                    });
-                                } else {
-                                    console.log(eachErr);
-                                }
-                            });
+                            return cb(null, new File(JSON.parse(`"${fileObjAttempt[1]}"`)));
                         }
                     }
+                } else {
+                    return cb('Cannot parse data from URL.', null);
                 }
             }
         } else {
-            console.log('ERROR: Couldn\'t find JSON in the page HTML!');
+            return cb(reqErr, null);
+        }
+    });
+}
+
+const fns = {
+    beforeDl: (file) => {
+        console.log(`Downloading "${file.filename}"...`);
+    },
+    afterDl: (file) => {
+        console.log(`Downloading "${file.filename}"... done.`);
+    },
+    beforePage: (page) => {
+        console.log(`Getting files from page ${page}...`);
+    },
+    afterPage: (page) => {
+        console.log(`Getting files from page ${page}... done.`);
+    },
+    beforeAlbumDl: () => {
+        console.log('Getting album...');
+    },
+    afterAlbumDl: () => {
+        console.log('Getting album... done.');
+    },
+    beforeRecursiveAlbumDl: (len) => {
+        console.log(`\nChecking for subalbum(s)... ${len}.`);
+        console.log('Getting subalbum(s)...');
+    },
+    afterRecursiveAlbumDl: () => {
+        console.log('Getting subalbum(s)... done.\n');
+    },
+    noSubAlbums: () => {
+        console.log('\nChecking for subalbum(s)... 0.');
+    },
+};
+
+handleUrl(argv.url, (handleErr, handleData) => {
+    if (handleErr === null) {
+        if (handleData.type === 'album') {
+            handleData.download(argv.output, (origDlErr) => {
+                if (origDlErr === null) {
+                    console.log('\nDone!');
+                } else {
+                    console.log(origDlErr);
+                }
+            }, argv.recursive, argv.recursive);
+        } else {
+            handleData.download(argv.output, (origDlErr) => {
+                if (origDlErr === null) {
+                    console.log('\nDone!');
+                } else {
+                    console.log(origDlErr);
+                }
+            });
         }
     } else {
-        console.log(reqErr);
+        console.log(handleErr);
     }
-});
+}, fns);
