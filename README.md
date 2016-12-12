@@ -3,6 +3,8 @@ Spiritual successor to [PB_Shovel](https://github.com/Daxda/PB_Shovel/). Basical
 
 ## Installation
 
+[Install a recent version of Node.js](https://nodejs.org/en/download/package-manager/), then:
+
 ```
 npm i -g pb_spade
 ```
