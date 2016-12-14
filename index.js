@@ -41,6 +41,7 @@ const extend = require('deep-extend');
 const fs = require('fs-extra');
 const path = require('path');
 const request = require('request');
+const touch = require('touch');
 const url = require('url');
 
 function opts(custom) {
@@ -145,18 +146,33 @@ class File {
         retry(argv.mediaTimeout, (retryCb) => {
             fs.ensureDirSync(path.parse(toPath).dir);
             const fileStream = fs.createWriteStream(toPath);
+            let created = '';
 
             fileStream.on('close', () => {
                 if (typeof this.fns.afterDl === 'function') {
                     this.fns.afterDl(this);
                 }
-                return retryCb(null);
+                if (created !== '') {
+                    touch(toPath, {
+                        mtime: new Date(created),
+                    }, () => {
+                        return retryCb(null);
+                    });
+                }
             });
 
             setTimeout(() => {
                 request({
                     accept: 'image/webp,image/*',
                     uri: this.url,
+                }, (reqErr, reqRes) => {
+                    if (reqErr === null) {
+                        if (typeof reqRes.headers['last-modified'] === 'string') {
+                            created = reqRes.headers['last-modified'];
+                        }
+                    } else {
+                        retryCb(reqErr);
+                    }
                 }).on('error', (reqErr) => {
                     if (reqErr !== null) {
                         return retryCb(reqErr);
