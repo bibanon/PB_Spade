@@ -32,10 +32,6 @@ if (typeof argv.output === 'undefined' && typeof argv.links === 'undefined') {
     process.exit(1);
 }
 
-if (argv.output[argv.output.length - 1] !== '/') {
-    argv.output += '/';
-}
-
 const async = require('async');
 const extend = require('deep-extend');
 const fs = require('fs-extra');
@@ -439,6 +435,10 @@ const fns = {
 handleUrl(argv.url, (handleErr, handleData) => {
     if (handleErr === null) {
         if (handleData.type === 'album') {
+            if (argv.output[argv.output.length - 1] !== '/') {
+                argv.output += '/';
+            }
+            
             handleData.download(argv.output, (origDlErr) => {
                 if (origDlErr === null) {
                     console.log('\nDone!');
