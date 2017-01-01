@@ -6,6 +6,7 @@ const commander = require('commander');
 
 const argv = commander
     .option('-a, --attempts [num]', 'number of times to try to connect to Photobucket', parseInt, 3)
+    .option('-f, --fake', 'simulate (don\'t download anything)', false)
     .option('-m, --media-timeout [ms]', 'time between requests (in milliseconds) to Photobucket\'s media servers', parseInt, 500)
     //.option('-l, --links [file]', 'write image links to a file instead of downloading them')
     .option('-o, --output [path]', 'file/directory that media is saved to/in (if directory, will be created if it doesn\'t exist)')
@@ -106,14 +107,38 @@ function req(customOpts, reqCb) {
 function apiReq(customOpts, reqCb) {
     req(customOpts, (reqErr, reqBody) => {
         if (reqErr === null) {
+            let data = {};
             try {
-                let data = {};
                 data = JSON.parse(reqBody);
-                return reqCb(null, data);
             } catch (jsonErr) {
+                if (argv.verbose) {
+                    console.log({
+                        status: 'jsonErr',
+                        opts: customOpts,
+                        err: reqErr,
+                        res: reqBody,
+                    });
+                }
                 return reqCb(jsonErr, null);
             }
+            if (argv.verbose) {
+                console.log({
+                    status: 'normal',
+                    opts: customOpts,
+                    err: reqErr,
+                    res: data,
+                });
+            }
+            return reqCb(null, data);
         } else {
+            if (argv.verbose) {
+                console.log({
+                    status: 'reqErr',
+                    opts: customOpts,
+                    err: reqErr,
+                    res: reqBody,
+                });
+            }
             return reqCb(reqErr, null);
         }
     });
@@ -139,43 +164,47 @@ class File {
         if (typeof this.fns.beforeDl === 'function') {
             this.fns.beforeDl(this);
         }
-        retry(argv.mediaTimeout, (retryCb) => {
-            fs.ensureDirSync(path.parse(toPath).dir);
-            const fileStream = fs.createWriteStream(toPath);
-            let created = '';
+        if (!argv.fake) {
+            retry(argv.mediaTimeout, (retryCb) => {
+                fs.ensureDirSync(path.parse(toPath).dir);
+                const fileStream = fs.createWriteStream(toPath);
+                let created = '';
 
-            fileStream.on('close', () => {
-                if (typeof this.fns.afterDl === 'function') {
-                    this.fns.afterDl(this);
-                }
-                if (created !== '') {
-                    touch(toPath, {
-                        mtime: new Date(created),
-                    }, () => {
-                        return retryCb(null);
-                    });
-                }
-            });
+                fileStream.on('close', () => {
+                    if (typeof this.fns.afterDl === 'function') {
+                        this.fns.afterDl(this);
+                    }
+                    if (created !== '') {
+                        touch(toPath, {
+                            mtime: new Date(created),
+                        }, () => {
+                            return retryCb(null);
+                        });
+                    }
+                });
 
-            setTimeout(() => {
-                request({
-                    accept: 'image/webp,image/*',
-                    uri: this.url,
-                }, (reqErr, reqRes) => {
-                    if (reqErr === null) {
-                        if (typeof reqRes.headers['last-modified'] === 'string') {
-                            created = reqRes.headers['last-modified'];
+                setTimeout(() => {
+                    request({
+                        accept: 'image/webp,image/*',
+                        uri: this.url,
+                    }, (reqErr, reqRes) => {
+                        if (reqErr === null) {
+                            if (typeof reqRes.headers['last-modified'] === 'string') {
+                                created = reqRes.headers['last-modified'];
+                            }
+                        } else {
+                            retryCb(reqErr);
                         }
-                    } else {
-                        retryCb(reqErr);
-                    }
-                }).on('error', (reqErr) => {
-                    if (reqErr !== null) {
-                        return retryCb(reqErr);
-                    }
-                }).pipe(fileStream);
-            }, argv.mediaTimeout);
-        }, cb);
+                    }).on('error', (reqErr) => {
+                        if (reqErr !== null) {
+                            return retryCb(reqErr);
+                        }
+                    }).pipe(fileStream);
+                }, argv.mediaTimeout);
+            }, cb);
+        } else {
+            cb(null);
+        }
     }
 }
 
@@ -231,32 +260,37 @@ class Album {
                 out = pageData.files;
 
                 let pagesNeeded = 0;
-                while (pagesNeeded * this.perPage < this.total) {
-                    pagesNeeded += 1;
-                }
 
-                pagesNeeded -= 1; // because we already did the first page
-
-                return async.mapSeries([...Array(pagesNeeded).keys()].map((num) => {
-                    return num + 2;
-                }), (num, mapCb) => {
-                    this.page(num, (mapPageErr, mapPageData) => {
-                        if (mapPageErr === null) {
-                            return mapCb(null, mapPageData.files);
-                        } else {
-                            return mapCb(mapPageErr, null);
-                        }
-                    }, typeof fns === 'object' ? fns : undefined);
-                }, (mapErr, mapData) => {
-                    if (mapErr === null) {
-                        mapData.forEach((page) => {
-                            out = out.concat(page);
-                        });
-                        return cb(null, out);
-                    } else {
-                        return cb(mapErr, null);
+                if (this.total > 0) {
+                    while (pagesNeeded * this.perPage < this.total) {
+                        pagesNeeded += 1;
                     }
-                });
+
+                    pagesNeeded -= 1; // because we already did the first page
+
+                    return async.mapSeries([...Array(pagesNeeded).keys()].map((num) => {
+                        return num + 2;
+                    }), (num, mapCb) => {
+                        this.page(num, (mapPageErr, mapPageData) => {
+                            if (mapPageErr === null) {
+                                return mapCb(null, mapPageData.files);
+                            } else {
+                                return mapCb(mapPageErr, null);
+                            }
+                        }, typeof fns === 'object' ? fns : undefined);
+                    }, (mapErr, mapData) => {
+                        if (mapErr === null) {
+                            mapData.forEach((page) => {
+                                out = out.concat(page);
+                            });
+                            return cb(null, out);
+                        } else {
+                            return cb(mapErr, null);
+                        }
+                    });
+                } else {
+                    cb(null, []);
+                }
             } else {
                 return cb(pageErr, null);
             }
@@ -280,17 +314,18 @@ class Album {
                         }
                         if (recursive) {
                             this.subalbums((subalbumsErr, subalbumsData) => {
-                                if (subalbumsData.length === 0) {
-                                    if (typeof this.fns.noSubAlbums === 'function') {
-                                        this.fns.noSubAlbums();
-                                    }
-                                } else {
-                                    if (typeof this.fns.beforeRecursiveAlbumDl === 'function') {
-                                        this.fns.beforeRecursiveAlbumDl(subalbumsData.length);
-                                    }
-                                }
                                 if (subalbumsErr === null) {
+                                    if (subalbumsData.length === 0) {
+                                        if (typeof this.fns.noSubAlbums === 'function') {
+                                            this.fns.noSubAlbums();
+                                        }
+                                    } else {
+                                        if (typeof this.fns.beforeRecursiveAlbumDl === 'function') {
+                                            this.fns.beforeRecursiveAlbumDl(subalbumsData.length);
+                                        }
+                                    }
                                     async.eachSeries(subalbumsData, (subalbum, subalbumEachCb) => {
+                                        console.log(subalbum);
                                         subalbum.album.download(`${directory + subalbum.title.replace(/[\\/><|:&"?*]/g, '_')}/`, subalbumEachCb, true);
                                     }, (subalbumDlErr) => {
                                         if (subalbumDlErr === null) {
@@ -339,7 +374,7 @@ class Album {
                 } else {
                     cb(null, reqBody.body.subAlbums.map((subalbum) => {
                         return {
-                            albums: new Album(subalbum.linkUrl, subalbum.path, typeof fns === 'object' ? fns : undefined),
+                            album: new Album(subalbum.linkUrl, subalbum.path, typeof fns === 'object' ? fns : undefined),
                             title: subalbum.title,
                         };
                     }));
@@ -438,7 +473,6 @@ handleUrl(argv.url, (handleErr, handleData) => {
             if (argv.output[argv.output.length - 1] !== '/') {
                 argv.output += '/';
             }
-            
             handleData.download(argv.output, (origDlErr) => {
                 if (origDlErr === null) {
                     console.log('\nDone!');
