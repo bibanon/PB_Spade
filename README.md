@@ -18,6 +18,7 @@ npm i -g pb_spade
 
     -h, --help                output usage information
     -a, --attempts [num]      number of times to try to connect to Photobucket
+    -f, --fake                simulate (don't download anything)
     -m, --media-timeout [ms]  time between requests (in milliseconds) to Photobucket's media servers
     -o, --output [path]       file/directory that media is saved to/in (if directory, will be created if it doesn't exist)
     -r, --recursive           if album, get subalbums (including their subalbums)
