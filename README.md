@@ -53,3 +53,10 @@ pb_spade -u "http://s160.photobucket.com/user/Spinningfox/library/Internet%20Fad
 ```
 
 This will download all the files in that Photobucket album and inside its subalbums and save them in the `memes/` directory (inside the current directory). The directory will be created if it doesn't already exist.
+
+### Whole User Libraries
+
+```
+pb_spade -u "http://s160.photobucket.com/user/Spinningfox/library/" -o "spinningfox/" -r
+```
+This will download all the files in that user's library and save them in the `spinningfox/` directory (inside the current directory). The directory will be created if it doesn't already exist.
